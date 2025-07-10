@@ -1,0 +1,16 @@
+# Cross compilation configuration
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# Default to native Linux target for tests
+[build]
+target = "x86_64-unknown-linux-gnu"
+
+# Use Windows GNU target for Windows builds
+[alias]
+build-windows = "build --target x86_64-pc-windows-gnu"
+build-windows-msvc = "build --target x86_64-pc-windows-msvc"
