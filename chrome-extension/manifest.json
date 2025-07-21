@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "My Launcher Tab Connector",
-  "version": "1.0.0",
-  "description": "Enables My Launcher to access and switch to Chrome tabs",
+  "version": "2.0.0",
+  "description": "Enables My Launcher to access and switch to Chrome tabs via WebSocket",
   
   "permissions": [
     "tabs",
-    "nativeMessaging"
+    "nativeMessaging",
+    "storage",
+    "alarms"
   ],
   
   "background": {
@@ -14,7 +16,7 @@
   },
   
   "host_permissions": [
-    "<all_urls>"
+    "ws://localhost:9999"
   ],
   
   "action": {

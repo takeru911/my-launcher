@@ -12,10 +12,9 @@ use my_launcher::window_thumbnail::ThumbnailCache;
 use std::sync::Arc;
 use std::error::Error;
 use std::time::{Duration, Instant};
-#[cfg(windows)]
 use std::thread;
-#[cfg(windows)]
 use tokio::runtime::Runtime;
+use my_launcher::websocket_server::WebSocketServer;
 
 fn setup_custom_fonts(ctx: &egui::Context) -> Result<(), Box<dyn Error>> {
     let mut fonts = egui::FontDefinitions::default();
@@ -214,19 +213,8 @@ impl LauncherApp {
                 }
             }
             
-            // タブ切り替えの場合は少し待機してから閉じる
-            match &result.action {
-                my_launcher::core::search_engine::Action::SwitchToTab { .. } => {
-                    // タブ切り替えコマンドが処理されるまで待つ
-                    self.status_message = Some("Processing tab switch...".to_string());
-                    self.status_timestamp = Some(Instant::now());
-                    // ウィンドウは開いたままにして、コマンドが処理されるのを待つ
-                },
-                _ => {
-                    // 他のアクションはすぐに閉じる
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
+            // WebSocket実装により、すべてのアクションで即座にウィンドウを閉じる
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -400,31 +388,17 @@ impl eframe::App for LauncherApp {
                 if let Some(timestamp) = self.status_timestamp {
                     let elapsed = timestamp.elapsed();
                     
-                    // タブ切り替え処理中の場合
-                    if status == "Processing tab switch..." {
-                        if elapsed > Duration::from_secs(2) {
-                            // 2秒経過したら自動的に閉じる
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        } else {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 10.0;
-                                ui.add(egui::Spinner::new());
-                                ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
-                            });
-                        }
+                    // Show status for 3 seconds (WebSocket実装により、即座にタブ切り替えが完了するため)
+                    if elapsed < Duration::from_secs(3) {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            ui.add(egui::Spinner::new());
+                            ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
+                        });
                     } else {
-                        // Show status for 3 seconds
-                        if elapsed < Duration::from_secs(3) {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 10.0;
-                                ui.add(egui::Spinner::new());
-                                ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
-                            });
-                        } else {
-                            // Clear status after timeout
-                            self.status_message = None;
-                            self.status_timestamp = None;
-                        }
+                        // Clear status after timeout
+                        self.status_message = None;
+                        self.status_timestamp = None;
                     }
                 }
             }
@@ -596,7 +570,7 @@ fn main() -> Result<(), eframe::Error> {
     // Create a shared TabManager instance
     let tab_manager = Arc::new(TabManager::new());
     
-    // Start IPC server in a background thread on Windows
+    // Start IPC server in a background thread on Windows (for backward compatibility)
     #[cfg(windows)]
     {
         let tab_manager_clone = Arc::clone(&tab_manager);
@@ -604,6 +578,21 @@ fn main() -> Result<(), eframe::Error> {
             log::info!("Starting IPC server thread");
             let rt = Runtime::new().expect("Failed to create Tokio runtime");
             rt.block_on(run_ipc_server(tab_manager_clone));
+        });
+    }
+    
+    // Start WebSocket server in a background thread
+    {
+        let tab_manager_clone = Arc::clone(&tab_manager);
+        thread::spawn(move || {
+            log::info!("Starting WebSocket server thread");
+            let rt = Runtime::new().expect("Failed to create Tokio runtime for WebSocket");
+            rt.block_on(async {
+                let server = WebSocketServer::new(tab_manager_clone, 9999);
+                if let Err(e) = server.start().await {
+                    log::error!("WebSocket server error: {}", e);
+                }
+            });
         });
     }
 
