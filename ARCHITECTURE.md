@@ -50,9 +50,9 @@ My Launcher is a Windows launcher application built with Rust, designed to be a 
 └────────────────────────┬───────────────────────────────────┘
                          │
 ┌────────────────────────▼───────────────────────────────────┐
-│           Native Messaging Layer (Chrome)                  │
+│           WebSocket Layer (Chrome)                         │
 │  ┌──────────────────┐ ┌────────────────────────────────┐  │
-│  │ native_host.rs   │ │ Chrome Extension (JS)          │  │
+│  │ websocket_server │ │ Chrome Extension (JS)          │  │
 │  └──────────────────┘ └────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -419,44 +419,41 @@ Captures and caches window thumbnails for visual preview.
    - Cache cleared on demand
    - Lazy loading on first access
 
-### Native Messaging Host (`src/native_host.rs`)
+### WebSocket Server (`src/websocket_server.rs`)
 
-Implements Chrome Native Messaging protocol for tab access.
+Implements WebSocket protocol for real-time tab access and control.
 
 **Protocol Implementation:**
 1. **Message Format**:
-   - 4-byte message length (little-endian)
-   - JSON message body
-   - Commands: `getTabs`, `switchToTab`
-   - Responses: `tabList`, `switchResult`
+   - JSON-based request/response/event messages
+   - Request: `{ type: "request", id, method, params }`
+   - Response: `{ type: "response", id, result/error }`
+   - Event: `{ type: "event", event, data }`
 
 2. **Communication Flow**:
-   - Reads from stdin, writes to stdout
-   - Binary length prefix for Chrome compatibility
-   - JSON serialization for messages
-   - Enhanced debug logging for troubleshooting
+   - WebSocket server on port 9999
+   - Real-time bidirectional communication
+   - Automatic reconnection with exponential backoff
+   - Keep-alive messages every 30 seconds
 
 3. **Chrome Extension Integration**:
-   - Extension manifest with permissions
-   - Background script handles tab API
-   - Native host manifest for system registration
-   - 500ms polling interval for responsive tab switching
-   - Command queue mechanism via IPC
+   - WebSocket client in Service Worker
+   - Permissions: tabs, storage, alarms
+   - No Native Host registration required
+   - Instant tab switching (<10ms latency)
 
 4. **Tab Switch Flow**:
    - Launcher queues command in TabManager
-   - Chrome extension polls native host every 500ms
-   - Native host checks command queue via IPC
-   - Commands sent via special error field format
+   - WebSocket server sends event to Chrome instantly
    - Chrome extension executes tab switch
-   - Acknowledgment sent back to launcher
-   - Visual feedback shown during operation
+   - Success acknowledgment sent back
+   - Window closes immediately (no 2-second wait)
 
 **Setup Requirements:**
-- Build native host binary
+- WebSocket server starts automatically with launcher
 - Install Chrome extension
-- Register native host in Windows registry
-- Configure extension ID in manifest
+- No system registration required
+- Works on localhost only (security)
 
 ## UI Layer
 

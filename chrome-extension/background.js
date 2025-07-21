@@ -240,42 +240,7 @@ class WebSocketClient {
 // Create global WebSocket client instance
 let wsClient = new WebSocketClient();
 
-// Native messaging compatibility layer (for backward compatibility during transition)
-const NATIVE_HOST = 'com.mylauncher.tabconnector';
-let nativePort = null;
-let useNativeMessaging = false; // Will be set based on WebSocket availability
-
-function connectNativeHost() {
-    if (!useNativeMessaging) return;
-    
-    console.log('Connecting to native host (fallback mode)...');
-    nativePort = chrome.runtime.connectNative(NATIVE_HOST);
-    
-    nativePort.onMessage.addListener((message) => {
-        console.log('Received from native host:', message);
-        handleNativeMessage(message);
-    });
-    
-    nativePort.onDisconnect.addListener(() => {
-        console.log('Disconnected from native host');
-        if (chrome.runtime.lastError) {
-            console.error('Native host connection error:', chrome.runtime.lastError.message);
-        }
-        nativePort = null;
-    });
-}
-
-function handleNativeMessage(message) {
-    // Similar logic to the original implementation
-    if (message.type === 'switchResult' && message.error && message.error.startsWith('SWITCH_TAB:')) {
-        const parts = message.error.split(':');
-        if (parts.length === 3) {
-            const tabId = parseInt(parts[1]);
-            const windowId = parseInt(parts[2]);
-            wsClient.executeSwitchToTab(tabId, windowId);
-        }
-    }
-}
+// Native Messaging support has been removed in favor of WebSocket
 
 // Tab change listeners
 chrome.tabs.onCreated.addListener((tab) => {
@@ -319,23 +284,7 @@ chrome.runtime.onStartup.addListener(() => {
 // Connect immediately
 wsClient.connect();
 
-// Check WebSocket connection status periodically and fall back to native messaging if needed
-setInterval(() => {
-    chrome.storage.local.get(['wsConnected'], (result) => {
-        if (!result.wsConnected && !useNativeMessaging && !nativePort) {
-            console.log('WebSocket not connected, falling back to native messaging');
-            useNativeMessaging = true;
-            connectNativeHost();
-        } else if (result.wsConnected && useNativeMessaging) {
-            console.log('WebSocket reconnected, disabling native messaging fallback');
-            useNativeMessaging = false;
-            if (nativePort) {
-                nativePort.disconnect();
-                nativePort = null;
-            }
-        }
-    });
-}, 5000);
+// WebSocket reconnection is handled automatically by the WebSocketClient class
 
 // Keep service worker alive
 chrome.alarms.create('keepAlive', { periodInMinutes: 0.5 });
