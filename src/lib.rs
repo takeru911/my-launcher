@@ -5,6 +5,8 @@ pub mod ui;
 pub mod logger;
 pub mod data;
 pub mod filter;
+#[cfg(windows)]
+pub mod ipc;
 
 #[cfg(test)]
 pub mod test_helpers;

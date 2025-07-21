@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "My Launcher Tab Connector",
+  "version": "1.0.0",
+  "description": "Enables My Launcher to access and switch to Chrome tabs",
+  
+  "permissions": [
+    "tabs",
+    "nativeMessaging"
+  ],
+  
+  "background": {
+    "service_worker": "background.js"
+  },
+  
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  
+  "action": {
+    "default_title": "My Launcher Tab Connector"
+  }
+}

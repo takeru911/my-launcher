@@ -4,6 +4,7 @@ use my_launcher::core::{
     search_engine::{SearchMode, SearchResult},
     window_manager::WindowsApiManager,
     BrowserSearchEngine,
+    native_messaging::TabManager,
 };
 use my_launcher::ui::alt_tab_grid::{AltTabGrid, GridItem};
 use my_launcher::ui::browser_list::BrowserList;
@@ -11,6 +12,10 @@ use my_launcher::window_thumbnail::ThumbnailCache;
 use std::sync::Arc;
 use std::error::Error;
 use std::time::{Duration, Instant};
+#[cfg(windows)]
+use std::thread;
+#[cfg(windows)]
+use tokio::runtime::Runtime;
 
 fn setup_custom_fonts(ctx: &egui::Context) -> Result<(), Box<dyn Error>> {
     let mut fonts = egui::FontDefinitions::default();
@@ -84,6 +89,7 @@ impl<'a> GridItem for SearchResultItem<'a> {
             my_launcher::core::search_engine::Action::GoogleSearch(query) => format!("google:{}", query),
             my_launcher::core::search_engine::Action::OpenBookmark(url) => format!("bookmark:{}", url),
             my_launcher::core::search_engine::Action::OpenHistory(url) => format!("history:{}", url),
+            my_launcher::core::search_engine::Action::SwitchToTab { tab_id, window_id } => format!("tab:{}:{}", tab_id, window_id),
         }
     }
 }
@@ -100,12 +106,20 @@ struct LauncherApp {
     last_input_change: Option<Instant>,
     pending_search_text: Option<String>,
     debounce_duration: Duration,
+    tab_manager: Arc<TabManager>,
+    status_message: Option<String>,
+    status_timestamp: Option<Instant>,
 }
 
 impl LauncherApp {
     fn new() -> Self {
+        let tab_manager = Arc::new(TabManager::new());
+        Self::new_with_tab_manager(tab_manager)
+    }
+    
+    fn new_with_tab_manager(tab_manager: Arc<TabManager>) -> Self {
         let window_manager = Arc::new(WindowsApiManager);
-        let search_engine = BrowserSearchEngine::new();
+        let search_engine = BrowserSearchEngine::new_with_tab_manager(Arc::clone(&tab_manager));
         let mut core = LauncherCore::new(search_engine, window_manager);
         
         // 初期状態でウィンドウ情報を更新
@@ -123,6 +137,9 @@ impl LauncherApp {
             last_input_change: None,
             pending_search_text: None,
             debounce_duration: Duration::from_millis(500), // 500msのデバウンス（調整可能）
+            tab_manager,
+            status_message: None,
+            status_timestamp: None,
         };
         
         // 初期表示のために検索を実行
@@ -166,9 +183,36 @@ impl LauncherApp {
         self.update_search();
     }
 
-    fn execute_selected(&self, ctx: &egui::Context) {
+    fn execute_selected(&mut self, ctx: &egui::Context) {
         if let Some(result) = self.search_results.get(self.grid.selected_index) {
-            self.core.execute_action(&result.action);
+            // Special handling for tab switching
+            match &result.action {
+                my_launcher::core::search_engine::Action::SwitchToTab { tab_id, window_id } => {
+                    use my_launcher::core::native_messaging::ChromeCommand;
+                    log::info!("=== TAB SWITCH INITIATED ===");
+                    log::info!("Tab ID: {}, Window ID: {}", tab_id, window_id);
+                    log::info!("Selected result: {} - {}", result.title, result.description);
+                    
+                    // Set status message
+                    self.status_message = Some(format!("Switching to tab: {}", result.title));
+                    self.status_timestamp = Some(Instant::now());
+                    
+                    // Queue the command
+                    self.tab_manager.queue_command(ChromeCommand::SwitchToTab {
+                        tab_id: *tab_id,
+                        window_id: *window_id,
+                    });
+                    log::info!("Command queued successfully");
+                    
+                    // Also execute the action to bring Chrome to front
+                    log::info!("Bringing Chrome window to front");
+                    self.core.execute_action(&result.action);
+                }
+                _ => {
+                    // For other actions, just execute normally
+                    self.core.execute_action(&result.action);
+                }
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -338,6 +382,25 @@ impl eframe::App for LauncherApp {
                 }
             });
 
+            // Display status message if present
+            if let Some(status) = &self.status_message {
+                if let Some(timestamp) = self.status_timestamp {
+                    let elapsed = timestamp.elapsed();
+                    // Show status for 3 seconds
+                    if elapsed < Duration::from_secs(3) {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            ui.add(egui::Spinner::new());
+                            ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
+                        });
+                    } else {
+                        // Clear status after timeout
+                        self.status_message = None;
+                        self.status_timestamp = None;
+                    }
+                }
+            }
+
             ui.separator();
 
             // モードに応じてUIを切り替え
@@ -371,8 +434,146 @@ impl eframe::App for LauncherApp {
     }
 }
 
+#[cfg(windows)]
+async fn run_ipc_server(tab_manager: Arc<TabManager>) {
+    use my_launcher::ipc::{self, IpcMessage, TabInfo};
+    use log::{info, error};
+    
+    info!("Starting IPC server");
+    
+    loop {
+        match ipc::create_ipc_server().await {
+            Ok(mut server) => {
+                info!("IPC server listening on {}", ipc::PIPE_NAME);
+                
+                // Accept a connection
+                match server.connect().await {
+                    Ok(_) => {
+                        info!("Client connected to IPC server");
+                        
+                        // Handle messages
+                        loop {
+                            match ipc::read_message(&mut server).await {
+                                Ok(message) => {
+                                    info!("Received IPC message: {:?}", message);
+                                    
+                                    let response = match message {
+                                        IpcMessage::GetTabs => {
+                                            info!("=== IPC SERVER: GetTabs request received ===");
+                                            // Check if there's a pending command
+                                            if let Some(command) = tab_manager.pop_command() {
+                                                use my_launcher::core::native_messaging::ChromeCommand;
+                                                use my_launcher::ipc::ChromeExtensionCommand;
+                                                
+                                                info!("Found pending command in queue!");
+                                                let ext_command = match command {
+                                                    ChromeCommand::SwitchToTab { tab_id, window_id } => {
+                                                        info!("Command: SwitchToTab(tab_id={}, window_id={})", tab_id, window_id);
+                                                        ChromeExtensionCommand::SwitchToTab { tab_id, window_id }
+                                                    }
+                                                };
+                                                
+                                                info!("Sending Chrome command to native host: {:?}", ext_command);
+                                                IpcMessage::ChromeCommand { command: ext_command }
+                                            } else {
+                                                // No pending command, return tab list
+                                                info!("No pending commands, returning tab list");
+                                                let tabs = tab_manager.get_tabs();
+                                                info!("Current tab count: {}", tabs.len());
+                                                let ipc_tabs: Vec<TabInfo> = tabs.into_iter().map(|tab| TabInfo {
+                                                    id: tab.id,
+                                                    window_id: tab.window_id,
+                                                    title: tab.title,
+                                                    url: tab.url,
+                                                    fav_icon_url: tab.fav_icon_url,
+                                                    active: tab.active,
+                                                    index: tab.index,
+                                                }).collect();
+                                                
+                                                IpcMessage::TabList { tabs: ipc_tabs }
+                                            }
+                                        }
+                                        IpcMessage::SwitchToTab { tab_id, window_id } => {
+                                            // TODO: Implement actual tab switching
+                                            // For now, just return success
+                                            info!("Tab switch requested: tab_id={}, window_id={}", tab_id, window_id);
+                                            IpcMessage::TabSwitchResult {
+                                                success: true,
+                                                error: None,
+                                            }
+                                        }
+                                        IpcMessage::TabList { tabs } => {
+                                            // Update the TabManager with the new tab list
+                                            use my_launcher::core::ChromeTab;
+                                            
+                                            let chrome_tabs: Vec<ChromeTab> = tabs.into_iter().map(|tab| ChromeTab {
+                                                id: tab.id,
+                                                window_id: tab.window_id,
+                                                title: tab.title,
+                                                url: tab.url,
+                                                fav_icon_url: tab.fav_icon_url,
+                                                active: tab.active,
+                                                index: tab.index,
+                                            }).collect();
+                                            
+                                            info!("Updating TabManager with {} tabs", chrome_tabs.len());
+                                            tab_manager.update_tabs(chrome_tabs);
+                                            
+                                            // Send acknowledgment
+                                            IpcMessage::TabSwitchResult {
+                                                success: true,
+                                                error: None,
+                                            }
+                                        }
+                                        _ => {
+                                            error!("Unexpected message type");
+                                            continue;
+                                        }
+                                    };
+                                    
+                                    if let Err(e) = ipc::send_message(&mut server, &response).await {
+                                        error!("Failed to send response: {}", e);
+                                        break;
+                                    }
+                                    
+                                    // Named pipes don't need explicit flush
+                                }
+                                Err(e) => {
+                                    error!("Failed to read message: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to accept connection: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to create IPC server: {}", e);
+                // Wait before retrying
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
+}
+
 fn main() -> Result<(), eframe::Error> {
     let _ = my_launcher::logger::init_logger();
+
+    // Create a shared TabManager instance
+    let tab_manager = Arc::new(TabManager::new());
+    
+    // Start IPC server in a background thread on Windows
+    #[cfg(windows)]
+    {
+        let tab_manager_clone = Arc::clone(&tab_manager);
+        thread::spawn(move || {
+            let rt = Runtime::new().expect("Failed to create Tokio runtime");
+            rt.block_on(run_ipc_server(tab_manager_clone));
+        });
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -383,9 +584,10 @@ fn main() -> Result<(), eframe::Error> {
         ..Default::default()
     };
 
+    let tab_manager_for_app = Arc::clone(&tab_manager);
     eframe::run_native(
         "My Launcher",
         options,
-        Box::new(|_cc| Box::new(LauncherApp::new())),
+        Box::new(move |_cc| Box::new(LauncherApp::new_with_tab_manager(tab_manager_for_app))),
     )
 }

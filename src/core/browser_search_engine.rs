@@ -2,11 +2,13 @@ use super::{SearchEngine, SearchResult, SearchMode, Action, ResultType, window_m
 use crate::data::{
     browser_provider::{BrowserDataProvider, ChromeBrowserProvider, CachedBrowserProvider},
     browser_item::{BookmarkItem, HistoryItem},
+    tab_provider::{TabProvider, ChromeTabProvider},
 };
 use std::sync::{Arc, Mutex};
 
 pub struct BrowserSearchEngine {
     browser_provider: Arc<Mutex<CachedBrowserProvider>>,
+    tab_provider: Arc<ChromeTabProvider>,
 }
 
 impl BrowserSearchEngine {
@@ -22,9 +24,31 @@ impl BrowserSearchEngine {
         };
         
         let cached_provider = CachedBrowserProvider::new(chrome_provider);
+        let tab_provider = Arc::new(ChromeTabProvider::new());
         
         Self {
             browser_provider: Arc::new(Mutex::new(cached_provider)),
+            tab_provider,
+        }
+    }
+    
+    pub fn new_with_tab_manager(tab_manager: Arc<crate::core::TabManager>) -> Self {
+        // Chrome用のプロバイダーを作成
+        let chrome_provider = match ChromeBrowserProvider::new() {
+            Ok(provider) => Box::new(provider) as Box<dyn BrowserDataProvider>,
+            Err(e) => {
+                log::error!("Failed to create Chrome provider: {}", e);
+                // ダミープロバイダーを返す
+                Box::new(DummyBrowserProvider)
+            }
+        };
+        
+        let cached_provider = CachedBrowserProvider::new(chrome_provider);
+        let tab_provider = Arc::new(ChromeTabProvider::new_with_tab_manager(tab_manager));
+        
+        Self {
+            browser_provider: Arc::new(Mutex::new(cached_provider)),
+            tab_provider,
         }
     }
     
@@ -32,6 +56,10 @@ impl BrowserSearchEngine {
         if let Ok(mut provider) = self.browser_provider.lock() {
             provider.refresh();
         }
+    }
+    
+    pub fn get_tab_manager(&self) -> Arc<crate::core::TabManager> {
+        self.tab_provider.get_tab_manager()
     }
 }
 
@@ -147,6 +175,31 @@ impl SearchEngine for BrowserSearchEngine {
                             Err(e) => {
                                 log::error!("Failed to get history: {}", e);
                             }
+                        }
+                        
+                        // 4. タブを検索
+                        let tabs = self.tab_provider.search_tabs(query);
+                        for tab_item in tabs {
+                            let tab = &tab_item.tab;
+                            let title = if tab.title.is_empty() {
+                                tab.url.clone()
+                            } else {
+                                tab.title.clone()
+                            };
+                            
+                            let active_indicator = if tab.active { " [ACTIVE]" } else { "" };
+                            let description = format!("{}{}", tab.url, active_indicator);
+                            
+                            results.push(SearchResult {
+                                title,
+                                description,
+                                action: Action::SwitchToTab { 
+                                    tab_id: tab.id, 
+                                    window_id: tab.window_id 
+                                },
+                                window_info: None,
+                                result_type: ResultType::Tab,
+                            });
                         }
                     }
                 }

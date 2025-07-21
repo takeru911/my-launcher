@@ -49,6 +49,7 @@ impl BrowserList {
                         ResultType::Bookmark => "⭐",
                         ResultType::History => "🕒",
                         ResultType::Window => "🪟",
+                        ResultType::Tab => "📑",
                     };
                     ui.label(icon);
                     
@@ -60,6 +61,7 @@ impl BrowserList {
                             ResultType::Bookmark => egui::Color32::from_rgb(60, 50, 40),      // 黄色っぽい
                             ResultType::History => egui::Color32::from_rgb(50, 40, 50),       // 紫っぽい
                             ResultType::Window => egui::Color32::from_rgb(40, 40, 40),        // グレー
+                            ResultType::Tab => egui::Color32::from_rgb(40, 60, 40),          // 緑っぽい
                         };
                         
                         let selected_bg_color = match &result.result_type {
@@ -67,6 +69,7 @@ impl BrowserList {
                             ResultType::Bookmark => egui::Color32::from_rgb(90, 70, 50),
                             ResultType::History => egui::Color32::from_rgb(70, 50, 70),
                             ResultType::Window => egui::Color32::from_rgb(60, 60, 60),
+                            ResultType::Tab => egui::Color32::from_rgb(50, 80, 50),
                         };
                         
                         let response = ui.add(

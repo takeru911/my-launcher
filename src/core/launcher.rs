@@ -39,6 +39,23 @@ impl<S: SearchEngine, W: WindowManager> LauncherCore<S, W> {
             Action::OpenBookmark(url) | Action::OpenHistory(url) => {
                 let _ = open::that(url);
             }
+            Action::SwitchToTab { tab_id, window_id } => {
+                // Queue the command to be picked up by the native host
+                log::info!("Queueing tab switch: tab_id={}, window_id={}", tab_id, window_id);
+                
+                // This is handled in the LauncherApp since it has access to TabManager
+                log::info!("Tab switching will be handled by LauncherApp");
+                
+                // Open Chrome to the foreground as a fallback
+                #[cfg(windows)]
+                {
+                    // Try to find and focus a Chrome window
+                    if let Some(chrome_window) = self.cached_windows.iter()
+                        .find(|w| w.process_name.to_lowercase().contains("chrome")) {
+                        self.window_manager.switch_to_window(chrome_window.hwnd);
+                    }
+                }
+            }
         }
     }
 

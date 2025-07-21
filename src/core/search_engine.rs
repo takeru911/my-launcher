@@ -12,6 +12,7 @@ pub enum Action {
     GoogleSearch(String),
     OpenBookmark(String), // URL
     OpenHistory(String),  // URL
+    SwitchToTab { tab_id: i32, window_id: i32 },  // Chrome tab
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -20,6 +21,7 @@ pub enum ResultType {
     Bookmark,
     History,
     Window,
+    Tab,
 }
 
 #[derive(Clone, Debug)]
