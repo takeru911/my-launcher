@@ -44,7 +44,36 @@ enum TabListResponse {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    env_logger::init();
+    // Initialize logger with file output for debugging
+    use env_logger::Builder;
+    use std::fs::OpenOptions;
+    use std::io::Write as IoWrite;
+    
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("C:\\temp\\native-host.log")
+        .ok();
+    
+    let mut builder = Builder::new();
+    builder.filter_level(log::LevelFilter::Debug);
+    
+    if let Some(file) = log_file {
+        use std::sync::Mutex;
+        let file = Mutex::new(file);
+        builder.format(move |buf, record| {
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let message = format!("[{}] {} - {}\n", timestamp, record.level(), record.args());
+            if let Ok(mut file) = file.lock() {
+                let _ = file.write_all(message.as_bytes());
+            }
+            writeln!(buf, "[{}] {} - {}", timestamp, record.level(), record.args())
+        });
+    }
+    
+    builder.init();
+    
+    log::info!("=== NATIVE HOST STARTED ===");
     
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -99,6 +128,7 @@ async fn main() -> io::Result<()> {
             }
         } else if let Ok(response) = serde_json::from_value::<TabListResponse>(json_value.clone()) {
             // Handle tab list from Chrome
+            log::info!("=== NATIVE HOST: Processing tabList from Chrome ===");
             handle_chrome_response(response).await;
         } else if json_value.get("type").and_then(|v| v.as_str()) == Some("tabSwitchAck") {
             // Handle tab switch acknowledgment from Chrome
@@ -123,7 +153,7 @@ async fn main() -> io::Result<()> {
                 }
             }
         } else {
-            eprintln!("Unknown message format");
+            log::warn!("Unknown message format: {:?}", json_value);
         }
     }
     

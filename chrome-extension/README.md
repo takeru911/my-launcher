@@ -7,6 +7,9 @@ This Chrome extension enables My Launcher to access and switch to Chrome tabs.
 - Lists all open Chrome tabs
 - Allows My Launcher to switch to specific tabs
 - Secure communication via Native Messaging API
+- Fast 500ms polling for responsive tab switching
+- Comprehensive error handling and debug logging
+- Visual feedback in launcher during tab switch
 
 ## Installation
 
@@ -50,11 +53,32 @@ Replace `YOUR_EXTENSION_ID_HERE` with the actual extension ID from step 2.
 1. Check that the extension ID in the registry matches the actual extension ID
 2. Ensure the native host executable exists at the specified path
 3. Check Chrome's console for error messages (right-click extension icon → Inspect)
+4. Look for "Connected to native host" message in console
+
+### Tab switching not working
+
+1. Open Chrome DevTools Console (F12) and look for:
+   - `=== CHROME EXTENSION: Message received ===`
+   - `=== TAB SWITCH COMMAND DETECTED ===`
+   - `=== EXECUTING TAB SWITCH ===`
+   - `=== TAB SWITCH SUCCESSFUL ===`
+2. If you don't see these messages, reload the extension
+3. Check that the native host binary is up to date
+4. Run My Launcher with `RUST_LOG=debug` for detailed logs
 
 ### Permission errors
 
 - Make sure you ran the PowerShell script as Administrator
 - Check that the manifest file paths are correct in the registry
+
+### Debugging tips
+
+1. **Chrome Extension Console**: Shows all extension activity
+2. **My Launcher Logs**: Run with `RUST_LOG=debug` environment variable
+3. **Common issues**:
+   - Extension needs reload after code changes
+   - Native host binary needs update after rebuild
+   - Chrome must not be in "Do Not Disturb" mode
 
 ## Uninstallation
 
@@ -72,3 +96,26 @@ Then remove the extension from Chrome's extension management page.
 - The extension only has access to tab information (title, URL)
 - Communication is restricted to the registered native host
 - No external network requests are made
+
+## Technical Details
+
+### Message Flow
+
+1. **Tab Listing**:
+   - Extension polls native host every 500ms with `getTabs` command
+   - Native host communicates with launcher via IPC
+   - Tab list is updated in launcher
+
+2. **Tab Switching**:
+   - User selects tab in launcher
+   - Command queued in TabManager
+   - Next poll retrieves command from queue
+   - Extension switches to tab using Chrome APIs
+   - Success acknowledgment sent back
+
+### Debug Mode
+
+To enable detailed logging:
+1. Chrome Extension: Open DevTools Console (F12)
+2. My Launcher: Set `RUST_LOG=debug` environment variable
+3. Look for messages prefixed with `===` for major events

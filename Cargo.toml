@@ -19,6 +19,10 @@ path = "src/main_alt_tab.rs"
 name = "test-window"
 path = "src/test_window.rs"
 
+[[bin]]
+name = "my-launcher-native-host"
+path = "src/native_host.rs"
+
 [dependencies]
 winit = "0.29"
 egui = "0.24"

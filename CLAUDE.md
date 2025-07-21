@@ -231,7 +231,7 @@ cargo fix --lib -p my-launcher
 ## Key Features
 
 ### Search Modes
-- **Browser Mode**: Integrated web search with browser data
+- **Browser Mode**: Integrated web search with browser data and Chrome tabs
 - **Windows Mode**: Window switching by title/process name
 
 ### Search Behavior
@@ -240,6 +240,7 @@ cargo fix --lib -p my-launcher
     1. Google search option (always first)
     2. Matching Chrome bookmarks (unlimited)
     3. Matching Chrome history (unlimited)
+    4. Matching Chrome tabs (requires Chrome extension)
   - Empty query → No results
   - Searches in title and URL fields
   - Supports Japanese/international characters
@@ -287,6 +288,39 @@ cargo fix --lib -p my-launcher
 - Use `cargo test -- --nocapture` for test output
 - Check Windows API errors with `GetLastError()`
 
+## Chrome Tab Search Setup
+
+To enable Chrome tab search functionality:
+
+1. **Build the native host**: `cargo build --release --target x86_64-pc-windows-gnu`
+2. **Load Chrome extension**: 
+   - Open `chrome://extensions/`
+   - Enable Developer mode
+   - Load unpacked from `chrome-extension/` directory
+   - Note the Extension ID
+3. **Install native host**: Run as Administrator:
+   ```powershell
+   .\install-native-host.ps1 -ExtensionId YOUR_EXTENSION_ID
+   ```
+4. **Test**: Start My Launcher and search for open Chrome tabs in Browser mode
+
+### Tab Switching Features
+- **Visual Feedback**: Shows "Switching to tab: [title]" with spinner during tab switch
+- **Fast Response**: 500ms polling interval for quick tab switching
+- **Error Handling**: Comprehensive error reporting in Chrome DevTools console
+- **Debug Logging**: Set `RUST_LOG=debug` to see detailed tab switch flow
+
+### Troubleshooting Tab Switching
+1. **Check Chrome DevTools Console**: Look for "=== TAB SWITCH ===" messages
+2. **Verify Extension Connection**: Should see "Connected to native host" message
+3. **Check Native Host Logs**: Run with `RUST_LOG=debug` for detailed logs
+4. **Common Issues**:
+   - Extension not reloaded after changes
+   - Native host binary not updated
+   - Chrome window minimized (will be restored automatically)
+
+See `chrome-extension/README.md` for detailed instructions.
+
 ## Known Issues & Workarounds
 
 1. **Linux testing**: Some tests require `--features test-support`
@@ -295,6 +329,7 @@ cargo fix --lib -p my-launcher
 4. **Chrome history**: Requires `--features sqlite` for history search
 5. **Chrome profile detection**: Only Windows is currently supported
 6. **Chrome database access**: Uses SQLite immutable mode to read Chrome's locked database files directly
+7. **Chrome tab search**: Requires Chrome extension installation and Native Messaging setup
 
 ## Project Structure
 ```

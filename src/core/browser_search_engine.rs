@@ -178,7 +178,9 @@ impl SearchEngine for BrowserSearchEngine {
                         }
                         
                         // 4. タブを検索
+                        log::info!("Searching tabs with query: '{}'", query);
                         let tabs = self.tab_provider.search_tabs(query);
+                        log::info!("Found {} matching tabs", tabs.len());
                         for tab_item in tabs {
                             let tab = &tab_item.tab;
                             let title = if tab.title.is_empty() {

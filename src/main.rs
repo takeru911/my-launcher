@@ -213,7 +213,20 @@ impl LauncherApp {
                     self.core.execute_action(&result.action);
                 }
             }
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            
+            // タブ切り替えの場合は少し待機してから閉じる
+            match &result.action {
+                my_launcher::core::search_engine::Action::SwitchToTab { .. } => {
+                    // タブ切り替えコマンドが処理されるまで待つ
+                    self.status_message = Some("Processing tab switch...".to_string());
+                    self.status_timestamp = Some(Instant::now());
+                    // ウィンドウは開いたままにして、コマンドが処理されるのを待つ
+                },
+                _ => {
+                    // 他のアクションはすぐに閉じる
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
         }
     }
 
@@ -376,9 +389,9 @@ impl eframe::App for LauncherApp {
                 }
 
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    // Enter キーが押された場合は即座に検索して実行
+                    // Enter キーが押された場合は即座に検索
+                    // execute_selected は handle_keyboard_input で処理されるため、ここでは検索のみ
                     self.force_search();
-                    self.execute_selected(ctx);
                 }
             });
 
@@ -386,17 +399,32 @@ impl eframe::App for LauncherApp {
             if let Some(status) = &self.status_message {
                 if let Some(timestamp) = self.status_timestamp {
                     let elapsed = timestamp.elapsed();
-                    // Show status for 3 seconds
-                    if elapsed < Duration::from_secs(3) {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 10.0;
-                            ui.add(egui::Spinner::new());
-                            ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
-                        });
+                    
+                    // タブ切り替え処理中の場合
+                    if status == "Processing tab switch..." {
+                        if elapsed > Duration::from_secs(2) {
+                            // 2秒経過したら自動的に閉じる
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                ui.add(egui::Spinner::new());
+                                ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
+                            });
+                        }
                     } else {
-                        // Clear status after timeout
-                        self.status_message = None;
-                        self.status_timestamp = None;
+                        // Show status for 3 seconds
+                        if elapsed < Duration::from_secs(3) {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                ui.add(egui::Spinner::new());
+                                ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
+                            });
+                        } else {
+                            // Clear status after timeout
+                            self.status_message = None;
+                            self.status_timestamp = None;
+                        }
                     }
                 }
             }
@@ -480,7 +508,8 @@ async fn run_ipc_server(tab_manager: Arc<TabManager>) {
                                                 info!("No pending commands, returning tab list");
                                                 let tabs = tab_manager.get_tabs();
                                                 info!("Current tab count: {}", tabs.len());
-                                                let ipc_tabs: Vec<TabInfo> = tabs.into_iter().map(|tab| TabInfo {
+                                                info!("Preparing to send {} tabs to native host", tabs.len());
+                                            let ipc_tabs: Vec<TabInfo> = tabs.into_iter().map(|tab| TabInfo {
                                                     id: tab.id,
                                                     window_id: tab.window_id,
                                                     title: tab.title,
@@ -502,16 +531,17 @@ async fn run_ipc_server(tab_manager: Arc<TabManager>) {
                                                 error: None,
                                             }
                                         }
-                                        IpcMessage::TabList { tabs } => {
+                                        IpcMessage::TabList { ref tabs } => {
+                                            info!("=== IPC SERVER: TabList received with {} tabs ===", tabs.len());
                                             // Update the TabManager with the new tab list
                                             use my_launcher::core::ChromeTab;
                                             
-                                            let chrome_tabs: Vec<ChromeTab> = tabs.into_iter().map(|tab| ChromeTab {
+                                            let chrome_tabs: Vec<ChromeTab> = tabs.iter().map(|tab| ChromeTab {
                                                 id: tab.id,
                                                 window_id: tab.window_id,
-                                                title: tab.title,
-                                                url: tab.url,
-                                                fav_icon_url: tab.fav_icon_url,
+                                                title: tab.title.clone(),
+                                                url: tab.url.clone(),
+                                                fav_icon_url: tab.fav_icon_url.clone(),
                                                 active: tab.active,
                                                 index: tab.index,
                                             }).collect();
@@ -536,7 +566,8 @@ async fn run_ipc_server(tab_manager: Arc<TabManager>) {
                                         break;
                                     }
                                     
-                                    // Named pipes don't need explicit flush
+                                    // Named pipes in Windows are single-connection
+                                    // After sending response, the connection will close
                                 }
                                 Err(e) => {
                                     error!("Failed to read message: {}", e);
@@ -570,6 +601,7 @@ fn main() -> Result<(), eframe::Error> {
     {
         let tab_manager_clone = Arc::clone(&tab_manager);
         thread::spawn(move || {
+            log::info!("Starting IPC server thread");
             let rt = Runtime::new().expect("Failed to create Tokio runtime");
             rt.block_on(run_ipc_server(tab_manager_clone));
         });

@@ -45,22 +45,20 @@ function handleNativeMessage(message) {
     return;
   }
   
-  // Handle response from native host requesting tabs
+  // Handle response from native host - if empty, send actual tabs
   if (message.type === 'tabList' && message.tabs && message.tabs.length === 0) {
     console.log('Native host returned empty tab list, sending actual tabs...');
     // Get all tabs and send them back
     chrome.tabs.query({}, (tabs) => {
       console.log('Sending', tabs.length, 'tabs to native host');
-      console.log('Tab details:', tabs); // デバッグ用
       const tabData = tabs.map(tab => ({
         id: tab.id,
         windowId: tab.windowId,
-        title: tab.title || tab.url || 'Untitled', // タイトルがない場合はURLを使用
+        title: tab.title || tab.url || 'Untitled',
         url: tab.url || '',
         favIconUrl: tab.favIconUrl || '',
         active: tab.active,
         index: tab.index,
-        // 追加情報
         status: tab.status,
         discarded: tab.discarded || false
       }));
@@ -70,6 +68,12 @@ function handleNativeMessage(message) {
         tabs: tabData
       });
     });
+    return;
+  }
+  
+  // If launcher already has tabs, don't send them again
+  if (message.type === 'tabList') {
+    console.log('Launcher already has', message.tabs.length, 'tabs');
     return;
   }
   

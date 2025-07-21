@@ -40,11 +40,15 @@ impl TabProvider for ChromeTabProvider {
     }
     
     fn search_tabs(&self, query: &str) -> Vec<TabItem> {
-        self.tab_manager
+        let all_tabs = self.tab_manager.get_tabs();
+        log::info!("TabProvider: Total tabs in manager: {}", all_tabs.len());
+        let results = self.tab_manager
             .search_tabs(query)
             .into_iter()
             .map(TabItem::new)
-            .collect()
+            .collect::<Vec<_>>();
+        log::info!("TabProvider: Returning {} tabs matching query '{}'", results.len(), query);
+        results
     }
     
     fn update_tabs(&self, tabs: Vec<ChromeTab>) {

@@ -30,9 +30,9 @@ My Launcher is a Windows launcher application built with Rust, designed to be a 
                          │
 ┌────────────────────────▼───────────────────────────────────┐
 │                    Data Layer                              │
-│  ┌──────────────────┐ ┌────────────────────────────────┐  │
-│  │ WindowProvider   │ │ WindowItem (Searchable)       │  │
-│  └──────────────────┘ └────────────────────────────────┘  │
+│  ┌──────────────────┐ ┌──────────────┐ ┌───────────────┐  │
+│  │ WindowProvider   │ │BrowserProvider│ │ TabProvider   │  │
+│  └──────────────────┘ └──────────────┘ └───────────────┘  │
 └────────────────────────┬───────────────────────────────────┘
                          │
 ┌────────────────────────▼───────────────────────────────────┐
@@ -47,6 +47,13 @@ My Launcher is a Windows launcher application built with Rust, designed to be a 
 │  ┌─────────────┐ ┌──────────────────┐ ┌────────────────┐  │
 │  │windows_api  │ │window_thumbnail  │ │ Logger         │  │
 │  └─────────────┘ └──────────────────┘ └────────────────┘  │
+└────────────────────────┬───────────────────────────────────┘
+                         │
+┌────────────────────────▼───────────────────────────────────┐
+│           Native Messaging Layer (Chrome)                  │
+│  ┌──────────────────┐ ┌────────────────────────────────┐  │
+│  │ native_host.rs   │ │ Chrome Extension (JS)          │  │
+│  └──────────────────┘ └────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -94,8 +101,9 @@ pub trait SearchEngine {
 1. **Browser Mode**: 
    - Integrates multiple search sources:
      - Google search (always first)
-     - Chrome bookmarks (up to 5 results)
-     - Chrome history (up to 5 results)
+     - Chrome bookmarks (unlimited results)
+     - Chrome history (unlimited results)
+     - Chrome tabs (requires Chrome extension)
    - Supports Japanese and international characters
 2. **Windows Mode**:
    - Searches through cached window information
@@ -109,8 +117,9 @@ Browser Mode:
 1. If empty query: return empty
 2. Otherwise:
    a. Add Google search result first
-   b. Search bookmarks (title, URL) - max 5 results
-   c. Search history (title, URL) - max 5 results
+   b. Search bookmarks (title, URL) - unlimited results
+   c. Search history (title, URL) - unlimited results
+   d. Search tabs (title, URL) - unlimited results
 
 Windows Mode:
 1. If empty query: return all windows
@@ -126,6 +135,7 @@ pub enum Action {
     GoogleSearch(String),    // Open Google search with query
     OpenBookmark(String),    // Open bookmark URL
     OpenHistory(String),     // Open history URL
+    SwitchToTab { tab_id: i32, window_id: i32 }, // Switch to Chrome tab (with visual feedback)
 }
 ```
 
@@ -136,6 +146,7 @@ pub enum ResultType {
     Bookmark,
     History,
     Window,
+    Tab,
 }
 ```
 
@@ -146,14 +157,41 @@ Advanced search engine implementation with browser data integration.
 ```rust
 pub struct BrowserSearchEngine {
     browser_provider: Arc<Mutex<CachedBrowserProvider>>,
+    tab_provider: Arc<ChromeTabProvider>,
 }
 ```
 
 **Features:**
 - Integrates Chrome bookmarks and history
+- Searches open Chrome tabs via Native Messaging
 - Caches browser data for performance
 - Graceful fallback when Chrome data is unavailable
 - Thread-safe with Arc<Mutex<>>
+
+### TabManager (`src/core/native_messaging.rs`)
+
+Manages Chrome tab information received from the Chrome extension.
+
+```rust
+pub struct TabManager {
+    tabs: Arc<Mutex<Vec<ChromeTab>>>,
+}
+
+pub struct ChromeTab {
+    pub id: i32,
+    pub window_id: i32,
+    pub title: String,
+    pub url: String,
+    pub fav_icon_url: String,
+    pub active: bool,
+    pub index: i32,
+}
+```
+
+**Features:**
+- Thread-safe storage of tab information
+- Updates from Native Messaging Host
+- Search functionality for tab filtering
 
 ### WindowManager (`src/core/window_manager.rs`)
 
@@ -266,6 +304,38 @@ pub struct HistoryItem {
 - Supports hierarchical bookmark folders
 - Includes visit statistics for history items
 
+### TabProvider (`src/data/tab_provider.rs`)
+
+Abstraction for Chrome tab data sources.
+
+```rust
+pub trait TabProvider: Send + Sync {
+    fn get_tabs(&self) -> Vec<TabItem>;
+    fn search_tabs(&self, query: &str) -> Vec<TabItem>;
+    fn update_tabs(&self, tabs: Vec<ChromeTab>);
+}
+```
+
+**ChromeTabProvider Implementation:**
+- Manages tab data from Chrome extension
+- Integrates with TabManager for thread-safe storage
+- Provides search functionality
+
+### TabItem (`src/data/tab_item.rs`)
+
+Data model for Chrome tabs.
+
+```rust
+pub struct TabItem {
+    pub tab: ChromeTab,
+}
+```
+
+**Features:**
+- Implements `Searchable` trait
+- Wraps ChromeTab data from Native Messaging
+- Provides display helpers (title fallback to URL)
+
 ## Filter Layer Components
 
 ### WindowFilter (`src/filter/window_filter.rs`)
@@ -349,6 +419,45 @@ Captures and caches window thumbnails for visual preview.
    - Cache cleared on demand
    - Lazy loading on first access
 
+### Native Messaging Host (`src/native_host.rs`)
+
+Implements Chrome Native Messaging protocol for tab access.
+
+**Protocol Implementation:**
+1. **Message Format**:
+   - 4-byte message length (little-endian)
+   - JSON message body
+   - Commands: `getTabs`, `switchToTab`
+   - Responses: `tabList`, `switchResult`
+
+2. **Communication Flow**:
+   - Reads from stdin, writes to stdout
+   - Binary length prefix for Chrome compatibility
+   - JSON serialization for messages
+   - Enhanced debug logging for troubleshooting
+
+3. **Chrome Extension Integration**:
+   - Extension manifest with permissions
+   - Background script handles tab API
+   - Native host manifest for system registration
+   - 500ms polling interval for responsive tab switching
+   - Command queue mechanism via IPC
+
+4. **Tab Switch Flow**:
+   - Launcher queues command in TabManager
+   - Chrome extension polls native host every 500ms
+   - Native host checks command queue via IPC
+   - Commands sent via special error field format
+   - Chrome extension executes tab switch
+   - Acknowledgment sent back to launcher
+   - Visual feedback shown during operation
+
+**Setup Requirements:**
+- Build native host binary
+- Install Chrome extension
+- Register native host in Windows registry
+- Configure extension ID in manifest
+
 ## UI Layer
 
 ### Main Launcher (`src/main.rs`)
@@ -370,14 +479,16 @@ struct LauncherApp {
 
 **Features:**
 - Mode switching (Browser/Windows)
-- Browser integration (Google search, bookmarks, history)
+- Browser integration (Google search, bookmarks, history, tabs)
 - Window search and switching with thumbnails
 - Adaptive UI: Browser mode uses BrowserList component, Windows mode uses grid
 - Japanese font support
 - Auto-focus on search input
-- Icons for different result types (🔍, ⭐, 🕒, 🪟)
+- Icons for different result types (🔍, ⭐, 🕒, 🪟, 📑)
 - Color-coded results in Browser mode for better visibility
 - URL trimming for long query parameters in history
+- Visual feedback during tab switching (spinner + status message)
+- Status messages auto-clear after 3 seconds
 
 
 ### UI Components (`src/ui/`)
@@ -396,6 +507,7 @@ struct LauncherApp {
   - Bookmarks: Yellow-tinted (#3C322B, selected: #5A4632)
   - History: Purple-tinted (#322832, selected: #463246)
   - Windows: Gray (#282828, selected: #3C3C3C)
+  - Tabs: Green-tinted (#283C28, selected: #325032)
 - URL trimming for long query parameters (max 50 chars)
 - Keyboard navigation (Up/Down/Home/End)
 - Scroll-to-selected functionality
@@ -471,6 +583,8 @@ Allows testing without Windows API dependencies.
 6. **Additional Filters**: Process-based, time-based, or usage-based filtering
 7. **Search Targets**: Extend beyond windows to files, applications, settings
 8. **Customizable Layouts**: User-defined grid sizes and thumbnail resolutions
+9. **Browser Support**: Extend to Firefox, Edge via their respective APIs
+10. **Enhanced Tab Actions**: Close tabs, move tabs between windows
 
 ## Configuration and State
 
@@ -488,6 +602,11 @@ Currently, the application has no persistent configuration. Future versions coul
 4. **No Network Access**: Except for opening URLs in browser
 5. **Chrome Data Access**: Read-only access to user's Chrome data (bookmarks, history)
 6. **Database Access**: Uses SQLite immutable mode for safe concurrent access
+7. **Native Messaging**: 
+   - Extension restricted to specific native host
+   - Native host restricted to specific extension ID
+   - Communication limited to local machine
+   - JSON-only message format prevents injection attacks
 
 ## Dependencies
 
@@ -496,7 +615,7 @@ Currently, the application has no persistent configuration. Future versions coul
 - `winapi`: Windows API bindings
 - `open`: Cross-platform file/URL opening
 - `urlencoding`: URL encoding for searches
-- `serde`/`serde_json`: JSON parsing for Chrome bookmarks
+- `serde`/`serde_json`: JSON parsing for Chrome bookmarks and Native Messaging
 - `url`: URL parsing utilities
 - `rusqlite`: SQLite for Chrome history (optional)
 - `chrono`: Timestamp handling
