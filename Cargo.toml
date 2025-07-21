@@ -19,15 +19,14 @@ path = "src/main_alt_tab.rs"
 name = "test-window"
 path = "src/test_window.rs"
 
-[[bin]]
-name = "my-launcher-native-host"
-path = "src/native_host.rs"
 
 [dependencies]
 winit = "0.29"
 egui = "0.24"
 eframe = "0.24"
 tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 open = "5.0"

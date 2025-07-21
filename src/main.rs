@@ -12,10 +12,9 @@ use my_launcher::window_thumbnail::ThumbnailCache;
 use std::sync::Arc;
 use std::error::Error;
 use std::time::{Duration, Instant};
-#[cfg(windows)]
 use std::thread;
-#[cfg(windows)]
 use tokio::runtime::Runtime;
+use my_launcher::websocket_server::WebSocketServer;
 
 fn setup_custom_fonts(ctx: &egui::Context) -> Result<(), Box<dyn Error>> {
     let mut fonts = egui::FontDefinitions::default();
@@ -214,19 +213,8 @@ impl LauncherApp {
                 }
             }
             
-            // タブ切り替えの場合は少し待機してから閉じる
-            match &result.action {
-                my_launcher::core::search_engine::Action::SwitchToTab { .. } => {
-                    // タブ切り替えコマンドが処理されるまで待つ
-                    self.status_message = Some("Processing tab switch...".to_string());
-                    self.status_timestamp = Some(Instant::now());
-                    // ウィンドウは開いたままにして、コマンドが処理されるのを待つ
-                },
-                _ => {
-                    // 他のアクションはすぐに閉じる
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
+            // WebSocket実装により、すべてのアクションで即座にウィンドウを閉じる
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -400,31 +388,17 @@ impl eframe::App for LauncherApp {
                 if let Some(timestamp) = self.status_timestamp {
                     let elapsed = timestamp.elapsed();
                     
-                    // タブ切り替え処理中の場合
-                    if status == "Processing tab switch..." {
-                        if elapsed > Duration::from_secs(2) {
-                            // 2秒経過したら自動的に閉じる
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        } else {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 10.0;
-                                ui.add(egui::Spinner::new());
-                                ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
-                            });
-                        }
+                    // Show status for 3 seconds (WebSocket実装により、即座にタブ切り替えが完了するため)
+                    if elapsed < Duration::from_secs(3) {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            ui.add(egui::Spinner::new());
+                            ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
+                        });
                     } else {
-                        // Show status for 3 seconds
-                        if elapsed < Duration::from_secs(3) {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 10.0;
-                                ui.add(egui::Spinner::new());
-                                ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(100, 200, 255)));
-                            });
-                        } else {
-                            // Clear status after timeout
-                            self.status_message = None;
-                            self.status_timestamp = None;
-                        }
+                        // Clear status after timeout
+                        self.status_message = None;
+                        self.status_timestamp = None;
                     }
                 }
             }
@@ -462,133 +436,7 @@ impl eframe::App for LauncherApp {
     }
 }
 
-#[cfg(windows)]
-async fn run_ipc_server(tab_manager: Arc<TabManager>) {
-    use my_launcher::ipc::{self, IpcMessage, TabInfo};
-    use log::{info, error};
-    
-    info!("Starting IPC server");
-    
-    loop {
-        match ipc::create_ipc_server().await {
-            Ok(mut server) => {
-                info!("IPC server listening on {}", ipc::PIPE_NAME);
-                
-                // Accept a connection
-                match server.connect().await {
-                    Ok(_) => {
-                        info!("Client connected to IPC server");
-                        
-                        // Handle messages
-                        loop {
-                            match ipc::read_message(&mut server).await {
-                                Ok(message) => {
-                                    info!("Received IPC message: {:?}", message);
-                                    
-                                    let response = match message {
-                                        IpcMessage::GetTabs => {
-                                            info!("=== IPC SERVER: GetTabs request received ===");
-                                            // Check if there's a pending command
-                                            if let Some(command) = tab_manager.pop_command() {
-                                                use my_launcher::core::native_messaging::ChromeCommand;
-                                                use my_launcher::ipc::ChromeExtensionCommand;
-                                                
-                                                info!("Found pending command in queue!");
-                                                let ext_command = match command {
-                                                    ChromeCommand::SwitchToTab { tab_id, window_id } => {
-                                                        info!("Command: SwitchToTab(tab_id={}, window_id={})", tab_id, window_id);
-                                                        ChromeExtensionCommand::SwitchToTab { tab_id, window_id }
-                                                    }
-                                                };
-                                                
-                                                info!("Sending Chrome command to native host: {:?}", ext_command);
-                                                IpcMessage::ChromeCommand { command: ext_command }
-                                            } else {
-                                                // No pending command, return tab list
-                                                info!("No pending commands, returning tab list");
-                                                let tabs = tab_manager.get_tabs();
-                                                info!("Current tab count: {}", tabs.len());
-                                                info!("Preparing to send {} tabs to native host", tabs.len());
-                                            let ipc_tabs: Vec<TabInfo> = tabs.into_iter().map(|tab| TabInfo {
-                                                    id: tab.id,
-                                                    window_id: tab.window_id,
-                                                    title: tab.title,
-                                                    url: tab.url,
-                                                    fav_icon_url: tab.fav_icon_url,
-                                                    active: tab.active,
-                                                    index: tab.index,
-                                                }).collect();
-                                                
-                                                IpcMessage::TabList { tabs: ipc_tabs }
-                                            }
-                                        }
-                                        IpcMessage::SwitchToTab { tab_id, window_id } => {
-                                            // TODO: Implement actual tab switching
-                                            // For now, just return success
-                                            info!("Tab switch requested: tab_id={}, window_id={}", tab_id, window_id);
-                                            IpcMessage::TabSwitchResult {
-                                                success: true,
-                                                error: None,
-                                            }
-                                        }
-                                        IpcMessage::TabList { ref tabs } => {
-                                            info!("=== IPC SERVER: TabList received with {} tabs ===", tabs.len());
-                                            // Update the TabManager with the new tab list
-                                            use my_launcher::core::ChromeTab;
-                                            
-                                            let chrome_tabs: Vec<ChromeTab> = tabs.iter().map(|tab| ChromeTab {
-                                                id: tab.id,
-                                                window_id: tab.window_id,
-                                                title: tab.title.clone(),
-                                                url: tab.url.clone(),
-                                                fav_icon_url: tab.fav_icon_url.clone(),
-                                                active: tab.active,
-                                                index: tab.index,
-                                            }).collect();
-                                            
-                                            info!("Updating TabManager with {} tabs", chrome_tabs.len());
-                                            tab_manager.update_tabs(chrome_tabs);
-                                            
-                                            // Send acknowledgment
-                                            IpcMessage::TabSwitchResult {
-                                                success: true,
-                                                error: None,
-                                            }
-                                        }
-                                        _ => {
-                                            error!("Unexpected message type");
-                                            continue;
-                                        }
-                                    };
-                                    
-                                    if let Err(e) = ipc::send_message(&mut server, &response).await {
-                                        error!("Failed to send response: {}", e);
-                                        break;
-                                    }
-                                    
-                                    // Named pipes in Windows are single-connection
-                                    // After sending response, the connection will close
-                                }
-                                Err(e) => {
-                                    error!("Failed to read message: {}", e);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to accept connection: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                error!("Failed to create IPC server: {}", e);
-                // Wait before retrying
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-        }
-    }
-}
+// IPCサーバーは削除（WebSocketに移行済み）
 
 fn main() -> Result<(), eframe::Error> {
     let _ = my_launcher::logger::init_logger();
@@ -596,14 +444,18 @@ fn main() -> Result<(), eframe::Error> {
     // Create a shared TabManager instance
     let tab_manager = Arc::new(TabManager::new());
     
-    // Start IPC server in a background thread on Windows
-    #[cfg(windows)]
+    // Start WebSocket server in a background thread
     {
         let tab_manager_clone = Arc::clone(&tab_manager);
         thread::spawn(move || {
-            log::info!("Starting IPC server thread");
-            let rt = Runtime::new().expect("Failed to create Tokio runtime");
-            rt.block_on(run_ipc_server(tab_manager_clone));
+            log::info!("Starting WebSocket server thread");
+            let rt = Runtime::new().expect("Failed to create Tokio runtime for WebSocket");
+            rt.block_on(async {
+                let server = WebSocketServer::new(tab_manager_clone, 9999);
+                if let Err(e) = server.start().await {
+                    log::error!("WebSocket server error: {}", e);
+                }
+            });
         });
     }
 

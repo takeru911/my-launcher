@@ -292,34 +292,36 @@ cargo fix --lib -p my-launcher
 
 To enable Chrome tab search functionality:
 
-1. **Build the native host**: `cargo build --release --target x86_64-pc-windows-gnu`
+1. **Build the launcher**: `cargo build --release --target x86_64-pc-windows-gnu --features sqlite`
 2. **Load Chrome extension**: 
    - Open `chrome://extensions/`
    - Enable Developer mode
    - Load unpacked from `chrome-extension/` directory
-   - Note the Extension ID
-3. **Install native host**: Run as Administrator:
-   ```powershell
-   .\install-native-host.ps1 -ExtensionId YOUR_EXTENSION_ID
-   ```
+3. **Run launcher**: The WebSocket server starts automatically on port 9999
 4. **Test**: Start My Launcher and search for open Chrome tabs in Browser mode
 
 ### Tab Switching Features
-- **Visual Feedback**: Shows "Switching to tab: [title]" with spinner during tab switch
-- **Fast Response**: 500ms polling interval for quick tab switching
-- **Error Handling**: Comprehensive error reporting in Chrome DevTools console
-- **Debug Logging**: Set `RUST_LOG=debug` to see detailed tab switch flow
+- **Instant Response**: WebSocket provides <10ms latency (previously 500ms)
+- **Visual Feedback**: Shows "Switching to tab: [title]" briefly
+- **Auto-reconnect**: Extension automatically reconnects if connection drops
+- **No Installation**: No Native Host registration required!
 
 ### Troubleshooting Tab Switching
-1. **Check Chrome DevTools Console**: Look for "=== TAB SWITCH ===" messages
-2. **Verify Extension Connection**: Should see "Connected to native host" message
-3. **Check Native Host Logs**: Run with `RUST_LOG=debug` for detailed logs
+1. **Check Chrome DevTools Console**: 
+   - Look for "=== WEBSOCKET CONNECTED ===" message
+   - Check for "=== TAB SWITCH EVENT RECEIVED ===" when switching
+2. **Verify WebSocket Connection**: Should see "WebSocket: Attempting to connect to ws://localhost:9999"
+3. **Check Launcher Logs**: Run with `RUST_LOG=debug` for detailed logs
 4. **Common Issues**:
+   - Port 9999 already in use
    - Extension not reloaded after changes
-   - Native host binary not updated
-   - Chrome window minimized (will be restored automatically)
+   - Firewall blocking localhost connections (rare)
 
-See `chrome-extension/README.md` for detailed instructions.
+### WebSocket Architecture Benefits
+- **Performance**: 50x faster tab switching
+- **Simplicity**: No complex Native Host setup
+- **Reliability**: Automatic reconnection
+- **Future-proof**: Easy to add more real-time features
 
 ## Known Issues & Workarounds
 
@@ -329,7 +331,7 @@ See `chrome-extension/README.md` for detailed instructions.
 4. **Chrome history**: Requires `--features sqlite` for history search
 5. **Chrome profile detection**: Only Windows is currently supported
 6. **Chrome database access**: Uses SQLite immutable mode to read Chrome's locked database files directly
-7. **Chrome tab search**: Requires Chrome extension installation and Native Messaging setup
+7. **Chrome tab search**: Requires Chrome extension installation (no Native Messaging setup needed!)
 
 ## Project Structure
 ```

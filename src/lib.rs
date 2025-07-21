@@ -7,6 +7,8 @@ pub mod data;
 pub mod filter;
 #[cfg(windows)]
 pub mod ipc;
+pub mod websocket_server;
+pub mod websocket_types;
 
 #[cfg(test)]
 pub mod test_helpers;
